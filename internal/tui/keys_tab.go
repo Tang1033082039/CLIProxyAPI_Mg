@@ -382,15 +382,40 @@ func renderProviderKeys(sb *strings.Builder, title string, keys []map[string]any
 	}
 	renderSection(sb, title, len(keys))
 	for i, key := range keys {
+		apiKeyEntries, _ := extractList(key, "api-key-entries")
 		apiKey := getString(key, "api-key")
 		prefix := getString(key, "prefix")
 		baseURL := getString(key, "base-url")
+		if len(apiKeyEntries) > 0 {
+			info := "configuration"
+			if prefix != "" {
+				info += " (prefix: " + prefix + ")"
+			}
+			if baseURL != "" {
+				info += " -> " + baseURL
+			}
+			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, info))
+			for j, entry := range apiKeyEntries {
+				entryInfo := maskKey(getString(entry, "api-key"))
+				if getBool(entry, "disabled") {
+					entryInfo += " [disabled]"
+				}
+				if proxyURL := getString(entry, "proxy-url"); proxyURL != "" {
+					entryInfo += " via " + proxyURL
+				}
+				sb.WriteString(fmt.Sprintf("     %d.%d %s\n", i+1, j+1, entryInfo))
+			}
+			continue
+		}
 		info := maskKey(apiKey)
 		if prefix != "" {
 			info += " (prefix: " + prefix + ")"
 		}
 		if baseURL != "" {
-			info += " → " + baseURL
+			info += " -> " + baseURL
+		}
+		if getBool(key, "disabled") {
+			info += " [disabled]"
 		}
 		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, info))
 	}

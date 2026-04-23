@@ -738,8 +738,8 @@ func proxyURLFromAPIKeyConfig(cfg *config.Config, auth *coreauth.Auth) string {
 			return strings.TrimSpace(entry.ProxyURL)
 		}
 	case "codex":
-		if entry := resolveAPIKeyConfig(cfg.CodexKey, auth); entry != nil {
-			return strings.TrimSpace(entry.ProxyURL)
+		if proxyURL := strings.TrimSpace(auth.ProxyURL); proxyURL != "" {
+			return proxyURL
 		}
 	}
 	return ""

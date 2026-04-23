@@ -175,8 +175,10 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	}
 
 	// Codex keys (do not print key material)
-	if len(oldCfg.CodexKey) != len(newCfg.CodexKey) {
-		changes = append(changes, fmt.Sprintf("codex-api-key count: %d -> %d", len(oldCfg.CodexKey), len(newCfg.CodexKey)))
+	oldCodexCount := codexAPIKeyConfigCount(oldCfg.CodexKey)
+	newCodexCount := codexAPIKeyConfigCount(newCfg.CodexKey)
+	if len(oldCfg.CodexKey) != len(newCfg.CodexKey) || oldCodexCount != newCodexCount {
+		changes = append(changes, fmt.Sprintf("codex-api-key count: %d -> %d", oldCodexCount, newCodexCount))
 	} else {
 		for i := range oldCfg.CodexKey {
 			o := oldCfg.CodexKey[i]
@@ -195,6 +197,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			}
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {
 				changes = append(changes, fmt.Sprintf("codex[%d].api-key: updated", i))
+			}
+			if !equalCodexAPIKeyEntries(o.EffectiveAPIKeyEntries(), n.EffectiveAPIKeyEntries()) {
+				changes = append(changes, fmt.Sprintf("codex[%d].api-key-entries: updated (%d -> %d entries)", i, o.CodexAPIKeyCount(), n.CodexAPIKeyCount()))
 			}
 			if !equalStringMap(o.Headers, n.Headers) {
 				changes = append(changes, fmt.Sprintf("codex[%d].headers: updated", i))
@@ -338,6 +343,32 @@ func equalStringMap(a, b map[string]string) bool {
 	}
 	for k, v := range a {
 		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func codexAPIKeyConfigCount(entries []config.CodexKey) int {
+	count := 0
+	for i := range entries {
+		count += entries[i].CodexAPIKeyCount()
+	}
+	return count
+}
+
+func equalCodexAPIKeyEntries(a, b []config.CodexAPIKeyEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i].APIKey) != strings.TrimSpace(b[i].APIKey) {
+			return false
+		}
+		if strings.TrimSpace(a[i].ProxyURL) != strings.TrimSpace(b[i].ProxyURL) {
+			return false
+		}
+		if a[i].Disabled != b[i].Disabled {
 			return false
 		}
 	}

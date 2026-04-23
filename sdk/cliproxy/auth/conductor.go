@@ -1682,10 +1682,33 @@ func resolveClaudeAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internal
 }
 
 func resolveCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.CodexKey {
-	if cfg == nil {
+	if cfg == nil || auth == nil {
 		return nil
 	}
-	return resolveAPIKeyConfig(cfg.CodexKey, auth)
+	attrKey, attrBase := "", ""
+	if auth.Attributes != nil {
+		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
+		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
+	}
+	for i := range cfg.CodexKey {
+		entry := &cfg.CodexKey[i]
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
+			return entry
+		}
+		if attrKey == "" {
+			continue
+		}
+		if attrBase != "" && cfgBase != "" && !strings.EqualFold(cfgBase, attrBase) {
+			continue
+		}
+		for _, keyEntry := range entry.EffectiveAPIKeyEntries() {
+			if strings.EqualFold(strings.TrimSpace(keyEntry.APIKey), attrKey) {
+				return entry
+			}
+		}
+	}
+	return nil
 }
 
 func resolveVertexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.VertexCompatKey {

@@ -353,7 +353,9 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int, int) {
 		claudeAPIKeyCount += len(cfg.ClaudeKey)
 	}
 	if len(cfg.CodexKey) > 0 {
-		codexAPIKeyCount += len(cfg.CodexKey)
+		for _, codexConfig := range cfg.CodexKey {
+			codexAPIKeyCount += codexConfig.CodexAPIKeyCount()
+		}
 	}
 	if len(cfg.OpenAICompatibility) > 0 {
 		for _, compatConfig := range cfg.OpenAICompatibility {

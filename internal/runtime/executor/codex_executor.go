@@ -891,27 +891,18 @@ func (e *CodexExecutor) resolveCodexConfig(auth *cliproxyauth.Auth) *config.Code
 	}
 	for i := range e.cfg.CodexKey {
 		entry := &e.cfg.CodexKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
-		if attrKey != "" && attrBase != "" {
-			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-			continue
-		}
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
-			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-		}
 		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
 			return entry
 		}
-	}
-	if attrKey != "" {
-		for i := range e.cfg.CodexKey {
-			entry := &e.cfg.CodexKey[i]
-			if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+		if attrKey == "" {
+			continue
+		}
+		if attrBase != "" && cfgBase != "" && !strings.EqualFold(cfgBase, attrBase) {
+			continue
+		}
+		for _, keyEntry := range entry.EffectiveAPIKeyEntries() {
+			if strings.EqualFold(strings.TrimSpace(keyEntry.APIKey), attrKey) {
 				return entry
 			}
 		}

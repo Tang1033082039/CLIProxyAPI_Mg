@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultPanelGitHubRepository = "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+	DefaultPanelGitHubRepository = "https://github.com/Tang1033082039/Mg-Cli-Proxy-API-Management-Center"
 	DefaultPprofAddr             = "127.0.0.1:8316"
 )
 
@@ -420,7 +420,11 @@ func (m ClaudeModel) GetAlias() string { return m.Alias }
 // including the API key itself and an optional base URL for the API endpoint.
 type CodexKey struct {
 	// APIKey is the authentication key for accessing Codex API services.
+	// Deprecated: use APIKeyEntries for multiple keys under one shared config.
 	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// APIKeyEntries defines API keys with optional per-key proxy and disabled state.
+	APIKeyEntries []CodexAPIKeyEntry `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
@@ -451,6 +455,44 @@ type CodexKey struct {
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
 func (k CodexKey) GetBaseURL() string { return k.BaseURL }
+
+// CodexAPIKeyEntry represents one API key inside a Codex provider config.
+type CodexAPIKeyEntry struct {
+	// APIKey is the authentication key for accessing Codex API services.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// ProxyURL overrides the parent proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Disabled keeps the key configured but excludes it from active routing.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
+// EffectiveAPIKeyEntries returns the configured Codex key entries. Legacy
+// api-key/proxy-url is exposed as a synthetic single entry when entries are absent.
+func (k CodexKey) EffectiveAPIKeyEntries() []CodexAPIKeyEntry {
+	if len(k.APIKeyEntries) > 0 {
+		return append([]CodexAPIKeyEntry(nil), k.APIKeyEntries...)
+	}
+	if strings.TrimSpace(k.APIKey) == "" {
+		return nil
+	}
+	return []CodexAPIKeyEntry{{
+		APIKey:   k.APIKey,
+		ProxyURL: k.ProxyURL,
+	}}
+}
+
+// CodexAPIKeyCount returns the number of non-empty key entries.
+func (k CodexKey) CodexAPIKeyCount() int {
+	count := 0
+	for _, entry := range k.EffectiveAPIKeyEntries() {
+		if strings.TrimSpace(entry.APIKey) != "" {
+			count++
+		}
+	}
+	return count
+}
 
 // CodexModel describes a mapping between an alias and the actual upstream model name.
 type CodexModel struct {
@@ -868,9 +910,30 @@ func (cfg *Config) SanitizeCodexKeys() {
 		e := cfg.CodexKey[i]
 		e.Prefix = normalizeModelPrefix(e.Prefix)
 		e.BaseURL = strings.TrimSpace(e.BaseURL)
+		e.APIKey = strings.TrimSpace(e.APIKey)
+		e.ProxyURL = strings.TrimSpace(e.ProxyURL)
+		if len(e.APIKeyEntries) > 0 {
+			entries := make([]CodexAPIKeyEntry, 0, len(e.APIKeyEntries))
+			for j := range e.APIKeyEntries {
+				keyEntry := e.APIKeyEntries[j]
+				keyEntry.APIKey = strings.TrimSpace(keyEntry.APIKey)
+				keyEntry.ProxyURL = strings.TrimSpace(keyEntry.ProxyURL)
+				if keyEntry.APIKey == "" {
+					continue
+				}
+				entries = append(entries, keyEntry)
+			}
+			e.APIKeyEntries = entries
+			if len(e.APIKeyEntries) > 0 {
+				e.APIKey = ""
+			}
+		}
 		e.Headers = NormalizeHeaders(e.Headers)
 		e.ExcludedModels = NormalizeExcludedModels(e.ExcludedModels)
 		if e.BaseURL == "" {
+			continue
+		}
+		if e.APIKey == "" && len(e.APIKeyEntries) == 0 {
 			continue
 		}
 		out = append(out, e)

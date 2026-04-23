@@ -1186,16 +1186,20 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 	}
 	for i := range s.cfg.CodexKey {
 		entry := &s.cfg.CodexKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
-			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-			continue
-		}
 		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
 			return entry
+		}
+		if attrKey == "" {
+			continue
+		}
+		if attrBase != "" && cfgBase != "" && !strings.EqualFold(cfgBase, attrBase) {
+			continue
+		}
+		for _, keyEntry := range entry.EffectiveAPIKeyEntries() {
+			if strings.EqualFold(strings.TrimSpace(keyEntry.APIKey), attrKey) {
+				return entry
+			}
 		}
 	}
 	return nil

@@ -18,9 +18,23 @@ type claudeKeyWithAuthIndex struct {
 	AuthIndex string `json:"auth-index,omitempty"`
 }
 
-type codexKeyWithAuthIndex struct {
-	config.CodexKey
+type codexAPIKeyEntryWithAuthIndex struct {
+	config.CodexAPIKeyEntry
 	AuthIndex string `json:"auth-index,omitempty"`
+}
+
+type codexKeyWithAuthIndex struct {
+	APIKey         string                          `json:"api-key"`
+	APIKeyEntries  []codexAPIKeyEntryWithAuthIndex `json:"api-key-entries,omitempty"`
+	Priority       int                             `json:"priority,omitempty"`
+	Prefix         string                          `json:"prefix,omitempty"`
+	BaseURL        string                          `json:"base-url"`
+	Websockets     bool                            `json:"websockets,omitempty"`
+	ProxyURL       string                          `json:"proxy-url"`
+	Models         []config.CodexModel             `json:"models"`
+	Headers        map[string]string               `json:"headers,omitempty"`
+	ExcludedModels []string                        `json:"excluded-models,omitempty"`
+	AuthIndex      string                          `json:"auth-index,omitempty"`
 }
 
 type vertexCompatKeyWithAuthIndex struct {
@@ -150,15 +164,39 @@ func (h *Handler) codexKeysWithAuthIndex() []codexKeyWithAuthIndex {
 	out := make([]codexKeyWithAuthIndex, len(h.cfg.CodexKey))
 	for i := range h.cfg.CodexKey {
 		entry := h.cfg.CodexKey[i]
-		authIndex := ""
-		if key := strings.TrimSpace(entry.APIKey); key != "" {
-			id, _ := idGen.Next("codex:apikey", key, entry.BaseURL)
-			authIndex = liveIndexByID[id]
+		response := codexKeyWithAuthIndex{
+			APIKey:         entry.APIKey,
+			Priority:       entry.Priority,
+			Prefix:         entry.Prefix,
+			BaseURL:        entry.BaseURL,
+			Websockets:     entry.Websockets,
+			ProxyURL:       entry.ProxyURL,
+			Models:         entry.Models,
+			Headers:        entry.Headers,
+			ExcludedModels: entry.ExcludedModels,
 		}
-		out[i] = codexKeyWithAuthIndex{
-			CodexKey:  entry,
-			AuthIndex: authIndex,
+		if len(entry.APIKeyEntries) == 0 {
+			if key := strings.TrimSpace(entry.APIKey); key != "" {
+				id, _ := idGen.Next("codex:apikey", key, entry.BaseURL)
+				response.AuthIndex = liveIndexByID[id]
+			}
+		} else {
+			response.APIKey = ""
+			response.APIKeyEntries = make([]codexAPIKeyEntryWithAuthIndex, len(entry.APIKeyEntries))
+			for j := range entry.APIKeyEntries {
+				apiKeyEntry := entry.APIKeyEntries[j]
+				proxyURL := strings.TrimSpace(apiKeyEntry.ProxyURL)
+				if proxyURL == "" {
+					proxyURL = strings.TrimSpace(entry.ProxyURL)
+				}
+				id, _ := idGen.Next("codex:apikey", apiKeyEntry.APIKey, entry.BaseURL, proxyURL)
+				response.APIKeyEntries[j] = codexAPIKeyEntryWithAuthIndex{
+					CodexAPIKeyEntry: apiKeyEntry,
+					AuthIndex:        liveIndexByID[id],
+				}
+			}
 		}
+		out[i] = response
 	}
 	return out
 }
