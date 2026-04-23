@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -31,6 +32,8 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeClaudeKeys(ctx)...)
 	// Codex API Keys
 	out = append(out, s.synthesizeCodexKeys(ctx)...)
+	// ToCodex API Keys
+	out = append(out, s.synthesizeToCodexKeys(ctx)...)
 	// OpenAI-compat
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
 	// Vertex-compat
@@ -189,6 +192,74 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 				ID:         id,
 				Provider:   "codex",
 				Label:      "codex-apikey",
+				Prefix:     prefix,
+				Status:     status,
+				Disabled:   keyEntry.Disabled,
+				ProxyURL:   proxyURL,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// synthesizeToCodexKeys creates Auth entries for ToCodex API keys.
+func (s *ConfigSynthesizer) synthesizeToCodexKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	cfg := ctx.Config
+	now := ctx.Now
+	idGen := ctx.IDGenerator
+
+	out := make([]*coreauth.Auth, 0, len(cfg.ToCodexKey))
+	for i := range cfg.ToCodexKey {
+		ck := cfg.ToCodexKey[i]
+		prefix := strings.TrimSpace(ck.Prefix)
+		base := strings.TrimSpace(ck.BaseURL)
+		parentProxyURL := strings.TrimSpace(ck.ProxyURL)
+		secretHash := ""
+		keyEntries := ck.EffectiveAPIKeyEntries()
+		for j := range keyEntries {
+			keyEntry := keyEntries[j]
+			key := strings.TrimSpace(keyEntry.APIKey)
+			secret := strings.TrimSpace(keyEntry.HMACSecret)
+			if key == "" || secret == "" {
+				continue
+			}
+			proxyURL := strings.TrimSpace(keyEntry.ProxyURL)
+			if proxyURL == "" {
+				proxyURL = parentProxyURL
+			}
+			secretHash = util.SHA256Hex(secret)
+			id, token := idGen.Next("tocodex:apikey", key, secretHash, base, proxyURL)
+			attrs := map[string]string{
+				"source":           fmt.Sprintf("config:tocodex[%s]", token),
+				"api_key":          key,
+				"hmac_secret_hash": secretHash,
+			}
+			if ck.Priority != 0 {
+				attrs["priority"] = strconv.Itoa(ck.Priority)
+			}
+			if base != "" {
+				attrs["base_url"] = base
+			}
+			if mode := strings.TrimSpace(ck.RequestMode); mode != "" {
+				attrs["request_mode"] = mode
+			}
+			if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
+				attrs["models_hash"] = hash
+			}
+			addConfigHeadersToAttrs(ck.Headers, attrs)
+			status := coreauth.StatusActive
+			if keyEntry.Disabled {
+				status = coreauth.StatusDisabled
+			}
+			a := &coreauth.Auth{
+				ID:         id,
+				Provider:   "tocodex",
+				Label:      "tocodex-apikey",
 				Prefix:     prefix,
 				Status:     status,
 				Disabled:   keyEntry.Disabled,

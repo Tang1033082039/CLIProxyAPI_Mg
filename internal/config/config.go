@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -101,6 +102,9 @@ type Config struct {
 
 	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
 	CodexKey []CodexKey `yaml:"codex-api-key" json:"codex-api-key"`
+
+	// ToCodex defines a list of ToCodex API key configurations.
+	ToCodexKey []ToCodexKey `yaml:"tocodex-api-key" json:"tocodex-api-key"`
 
 	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.
 	// These are used only when the client does not send its own headers.
@@ -506,6 +510,97 @@ type CodexModel struct {
 func (m CodexModel) GetName() string  { return m.Name }
 func (m CodexModel) GetAlias() string { return m.Alias }
 
+// ToCodexKey represents the configuration for a ToCodex API key group.
+type ToCodexKey struct {
+	// APIKey is the authentication key for accessing ToCodex services.
+	// Deprecated: use APIKeyEntries for multiple keys under one shared config.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// HMACSecret is the legacy signing secret paired with APIKey.
+	// Deprecated: use APIKeyEntries for multiple secrets under one shared config.
+	HMACSecret string `yaml:"hmac-secret,omitempty" json:"hmac-secret,omitempty"`
+
+	// APIKeyEntries defines API keys with per-key signing secret, proxy and disabled state.
+	APIKeyEntries []ToCodexAPIKeyEntry `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
+
+	// Priority controls selection preference when multiple credentials match.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
+
+	// Prefix optionally namespaces models for this credential.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// BaseURL is the upstream ToCodex base URL.
+	BaseURL string `yaml:"base-url" json:"base-url"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// RequestMode selects the upstream execution shape. Supported values: "responses", "chat".
+	RequestMode string `yaml:"request-mode,omitempty" json:"request-mode,omitempty"`
+
+	// ChatPath is the upstream path used when RequestMode is "chat".
+	ChatPath string `yaml:"chat-path,omitempty" json:"chat-path,omitempty"`
+
+	// ResponsesPath is the upstream path used when RequestMode is "responses".
+	ResponsesPath string `yaml:"responses-path,omitempty" json:"responses-path,omitempty"`
+
+	// ResponsesCompactPath is the upstream path used for compact responses requests.
+	ResponsesCompactPath string `yaml:"responses-compact-path,omitempty" json:"responses-compact-path,omitempty"`
+
+	// ModelsPath is the path used for model discovery.
+	ModelsPath string `yaml:"models-path,omitempty" json:"models-path,omitempty"`
+
+	// TestPath is the path used by the management UI key test action.
+	TestPath string `yaml:"test-path,omitempty" json:"test-path,omitempty"`
+
+	// Models defines upstream model names and aliases for request routing.
+	Models []CodexModel `yaml:"models,omitempty" json:"models,omitempty"`
+
+	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// ExcludedModels lists model IDs that should be excluded for this provider.
+	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+}
+
+func (k ToCodexKey) GetAPIKey() string  { return k.APIKey }
+func (k ToCodexKey) GetBaseURL() string { return k.BaseURL }
+
+// ToCodexAPIKeyEntry represents one API key inside a ToCodex provider config.
+type ToCodexAPIKeyEntry struct {
+	APIKey     string `yaml:"api-key" json:"api-key"`
+	HMACSecret string `yaml:"hmac-secret,omitempty" json:"hmac-secret,omitempty"`
+	ProxyURL   string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+	Disabled   bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+}
+
+// EffectiveAPIKeyEntries returns the configured ToCodex key entries. Legacy
+// api-key/hmac-secret/proxy-url is exposed as a synthetic single entry when entries are absent.
+func (k ToCodexKey) EffectiveAPIKeyEntries() []ToCodexAPIKeyEntry {
+	if len(k.APIKeyEntries) > 0 {
+		return append([]ToCodexAPIKeyEntry(nil), k.APIKeyEntries...)
+	}
+	if strings.TrimSpace(k.APIKey) == "" || strings.TrimSpace(k.HMACSecret) == "" {
+		return nil
+	}
+	return []ToCodexAPIKeyEntry{{
+		APIKey:     k.APIKey,
+		HMACSecret: k.HMACSecret,
+		ProxyURL:   k.ProxyURL,
+	}}
+}
+
+// ToCodexAPIKeyCount returns the number of non-empty key entries.
+func (k ToCodexKey) ToCodexAPIKeyCount() int {
+	count := 0
+	for _, entry := range k.EffectiveAPIKeyEntries() {
+		if strings.TrimSpace(entry.APIKey) != "" && strings.TrimSpace(entry.HMACSecret) != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // GeminiKey represents the configuration for a Gemini API key,
 // including optional overrides for upstream base URL, proxy routing, and headers.
 type GeminiKey struct {
@@ -718,6 +813,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Sanitize Codex keys: drop entries without base-url
 	cfg.SanitizeCodexKeys()
+
+	// Sanitize ToCodex keys: drop entries without base-url
+	cfg.SanitizeToCodexKeys()
 
 	// Sanitize Codex header defaults.
 	cfg.SanitizeCodexHeaderDefaults()
@@ -941,6 +1039,72 @@ func (cfg *Config) SanitizeCodexKeys() {
 	cfg.CodexKey = out
 }
 
+// SanitizeToCodexKeys removes ToCodex API key entries missing required routing data.
+func (cfg *Config) SanitizeToCodexKeys() {
+	if cfg == nil || len(cfg.ToCodexKey) == 0 {
+		return
+	}
+	out := make([]ToCodexKey, 0, len(cfg.ToCodexKey))
+	for i := range cfg.ToCodexKey {
+		entry := cfg.ToCodexKey[i]
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		entry.APIKey = strings.TrimSpace(entry.APIKey)
+		entry.HMACSecret = strings.TrimSpace(entry.HMACSecret)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.RequestMode = normalizeToCodexRequestMode(entry.RequestMode)
+		entry.ChatPath = normalizeOptionalRequestPath(entry.ChatPath)
+		entry.ResponsesPath = normalizeOptionalRequestPath(entry.ResponsesPath)
+		entry.ResponsesCompactPath = normalizeOptionalRequestPath(entry.ResponsesCompactPath)
+		entry.ModelsPath = normalizeOptionalRequestPath(entry.ModelsPath)
+		entry.TestPath = normalizeOptionalRequestPath(entry.TestPath)
+		if len(entry.APIKeyEntries) > 0 {
+			entries := make([]ToCodexAPIKeyEntry, 0, len(entry.APIKeyEntries))
+			for j := range entry.APIKeyEntries {
+				keyEntry := entry.APIKeyEntries[j]
+				keyEntry.APIKey = strings.TrimSpace(keyEntry.APIKey)
+				keyEntry.HMACSecret = strings.TrimSpace(keyEntry.HMACSecret)
+				keyEntry.ProxyURL = strings.TrimSpace(keyEntry.ProxyURL)
+				if keyEntry.APIKey == "" || keyEntry.HMACSecret == "" {
+					continue
+				}
+				entries = append(entries, keyEntry)
+			}
+			entry.APIKeyEntries = entries
+			if len(entry.APIKeyEntries) > 0 {
+				entry.APIKey = ""
+				entry.HMACSecret = ""
+			}
+		}
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		if len(entry.Models) > 0 {
+			normalizedModels := make([]CodexModel, 0, len(entry.Models))
+			for j := range entry.Models {
+				model := entry.Models[j]
+				model.Name = strings.TrimSpace(model.Name)
+				model.Alias = strings.TrimSpace(model.Alias)
+				if model.Name == "" && model.Alias == "" {
+					continue
+				}
+				normalizedModels = append(normalizedModels, model)
+			}
+			entry.Models = normalizedModels
+		}
+		if entry.BaseURL == "" {
+			continue
+		}
+		if entry.APIKey == "" && len(entry.APIKeyEntries) == 0 {
+			continue
+		}
+		if entry.APIKey != "" && entry.HMACSecret == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	cfg.ToCodexKey = out
+}
+
 // SanitizeClaudeKeys normalizes headers for Claude credentials.
 func (cfg *Config) SanitizeClaudeKeys() {
 	if cfg == nil || len(cfg.ClaudeKey) == 0 {
@@ -992,6 +1156,51 @@ func normalizeModelPrefix(prefix string) string {
 	}
 	if strings.Contains(trimmed, "/") {
 		return ""
+	}
+	return trimmed
+}
+
+func normalizeToCodexRequestMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "responses", "response":
+		return "responses"
+	case "chat", "chat-completions", "chat_completions":
+		return "chat"
+	default:
+		return "responses"
+	}
+}
+
+func normalizeOptionalRequestPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	return NormalizeRequestPath(trimmed, "")
+}
+
+// NormalizeRequestPath normalizes an HTTP request path or URL to a path + query string.
+func NormalizeRequestPath(pathOrURL string, fallback string) string {
+	trimmed := strings.TrimSpace(pathOrURL)
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(fallback)
+	}
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "://") {
+		if parsed, err := url.Parse(trimmed); err == nil {
+			trimmed = parsed.EscapedPath()
+			if trimmed == "" {
+				trimmed = "/"
+			}
+			if parsed.RawQuery != "" {
+				trimmed += "?" + parsed.RawQuery
+			}
+		}
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
 	}
 	return trimmed
 }

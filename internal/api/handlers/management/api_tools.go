@@ -1,6 +1,8 @@
 package management
 
 import (
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/geminicli"
@@ -205,13 +208,18 @@ func (h *Handler) APICall(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "request failed"})
 		return
 	}
+	decodedBody, errDecode := decodeAPICallResponseBody(resp.Body, resp.Header.Get("Content-Encoding"))
+	if errDecode != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to decode response"})
+		return
+	}
 	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
+		if errClose := decodedBody.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
 	}()
 
-	respBody, errReadAll := io.ReadAll(resp.Body)
+	respBody, errReadAll := io.ReadAll(decodedBody)
 	if errReadAll != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read response"})
 		return
@@ -222,6 +230,70 @@ func (h *Handler) APICall(c *gin.Context) {
 		Header:     resp.Header,
 		Body:       string(respBody),
 	})
+}
+
+type apiCallCompositeReadCloser struct {
+	io.Reader
+	closers []func() error
+}
+
+func (c *apiCallCompositeReadCloser) Close() error {
+	if c == nil {
+		return nil
+	}
+	var firstErr error
+	for i := len(c.closers) - 1; i >= 0; i-- {
+		if c.closers[i] == nil {
+			continue
+		}
+		if err := c.closers[i](); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func decodeAPICallResponseBody(body io.ReadCloser, contentEncoding string) (io.ReadCloser, error) {
+	if body == nil {
+		return nil, fmt.Errorf("response body is nil")
+	}
+	encodings := strings.Split(contentEncoding, ",")
+	for _, raw := range encodings {
+		switch strings.TrimSpace(strings.ToLower(raw)) {
+		case "", "identity":
+			continue
+		case "gzip":
+			reader, err := gzip.NewReader(body)
+			if err != nil {
+				_ = body.Close()
+				return nil, err
+			}
+			return &apiCallCompositeReadCloser{
+				Reader: reader,
+				closers: []func() error{
+					reader.Close,
+					body.Close,
+				},
+			}, nil
+		case "deflate":
+			reader := flate.NewReader(body)
+			return &apiCallCompositeReadCloser{
+				Reader: reader,
+				closers: []func() error{
+					reader.Close,
+					body.Close,
+				},
+			}, nil
+		case "br":
+			return &apiCallCompositeReadCloser{
+				Reader: brotli.NewReader(body),
+				closers: []func() error{
+					body.Close,
+				},
+			}, nil
+		}
+	}
+	return body, nil
 }
 
 func firstNonEmptyString(values ...*string) string {
@@ -753,6 +825,10 @@ func proxyURLFromAPIKeyConfig(cfg *config.Config, auth *coreauth.Auth) string {
 			return strings.TrimSpace(entry.ProxyURL)
 		}
 	case "codex":
+		if proxyURL := strings.TrimSpace(auth.ProxyURL); proxyURL != "" {
+			return proxyURL
+		}
+	case "tocodex":
 		if proxyURL := strings.TrimSpace(auth.ProxyURL); proxyURL != "" {
 			return proxyURL
 		}

@@ -965,6 +965,10 @@ func (m *Manager) rebuildAPIKeyModelAliasLocked(cfg *internalconfig.Config) {
 			if entry := resolveCodexAPIKeyConfig(cfg, auth); entry != nil {
 				compileAPIKeyModelAliasForModels(byAlias, entry.Models)
 			}
+		case "tocodex":
+			if entry := resolveToCodexAPIKeyConfig(cfg, auth); entry != nil {
+				compileAPIKeyModelAliasForModels(byAlias, entry.Models)
+			}
 		case "vertex":
 			if entry := resolveVertexAPIKeyConfig(cfg, auth); entry != nil {
 				compileAPIKeyModelAliasForModels(byAlias, entry.Models)
@@ -1609,6 +1613,8 @@ func (m *Manager) applyAPIKeyModelAlias(auth *Auth, requestedModel string) strin
 		upstreamModel = resolveUpstreamModelForClaudeAPIKey(cfg, auth, requestedModel)
 	case "codex":
 		upstreamModel = resolveUpstreamModelForCodexAPIKey(cfg, auth, requestedModel)
+	case "tocodex":
+		upstreamModel = resolveUpstreamModelForToCodexAPIKey(cfg, auth, requestedModel)
 	case "vertex":
 		upstreamModel = resolveUpstreamModelForVertexAPIKey(cfg, auth, requestedModel)
 	default:
@@ -1711,6 +1717,41 @@ func resolveCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalc
 	return nil
 }
 
+func resolveToCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.ToCodexKey {
+	if cfg == nil || auth == nil {
+		return nil
+	}
+	attrKey, attrBase, attrSecretHash := "", "", ""
+	if auth.Attributes != nil {
+		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
+		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
+		attrSecretHash = strings.TrimSpace(auth.Attributes["hmac_secret_hash"])
+	}
+	for i := range cfg.ToCodexKey {
+		entry := &cfg.ToCodexKey[i]
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
+			return entry
+		}
+		if attrKey == "" {
+			continue
+		}
+		if attrBase != "" && cfgBase != "" && !strings.EqualFold(cfgBase, attrBase) {
+			continue
+		}
+		for _, keyEntry := range entry.EffectiveAPIKeyEntries() {
+			if !strings.EqualFold(strings.TrimSpace(keyEntry.APIKey), attrKey) {
+				continue
+			}
+			if attrSecretHash != "" && util.SHA256Hex(keyEntry.HMACSecret) != attrSecretHash {
+				continue
+			}
+			return entry
+		}
+	}
+	return nil
+}
+
 func resolveVertexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.VertexCompatKey {
 	if cfg == nil {
 		return nil
@@ -1736,6 +1777,14 @@ func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth,
 
 func resolveUpstreamModelForCodexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveCodexAPIKeyConfig(cfg, auth)
+	if entry == nil {
+		return ""
+	}
+	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
+}
+
+func resolveUpstreamModelForToCodexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
+	entry := resolveToCodexAPIKeyConfig(cfg, auth)
 	if entry == nil {
 		return ""
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -388,6 +389,18 @@ func (s *Service) ensureExecutorsForAuthWithMode(a *coreauth.Auth, forceReplace 
 			}
 		}
 		s.coreManager.RegisterExecutor(executor.NewCodexAutoExecutor(s.cfg))
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(a.Provider), "tocodex") {
+		if !forceReplace {
+			existingExecutor, hasExecutor := s.coreManager.Executor("tocodex")
+			if hasExecutor {
+				if _, isToCodexExecutor := existingExecutor.(*executor.ToCodexExecutor); isToCodexExecutor {
+					return
+				}
+			}
+		}
+		s.coreManager.RegisterExecutor(executor.NewToCodexExecutor(s.cfg))
 		return
 	}
 	// Skip disabled auth entries when (re)binding executors.
@@ -924,6 +937,17 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			}
 		}
 		models = applyExcludedModels(models, excluded)
+	case "tocodex":
+		models = registry.GetCodexProModels()
+		if entry := s.resolveConfigToCodexKey(a); entry != nil {
+			if len(entry.Models) > 0 {
+				models = buildToCodexConfigModels(entry)
+			}
+			if authKind == "apikey" {
+				excluded = entry.ExcludedModels
+			}
+		}
+		models = applyExcludedModels(models, excluded)
 	case "kimi":
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
@@ -1205,6 +1229,41 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 	return nil
 }
 
+func (s *Service) resolveConfigToCodexKey(auth *coreauth.Auth) *config.ToCodexKey {
+	if auth == nil || s.cfg == nil {
+		return nil
+	}
+	var attrKey, attrBase, attrSecretHash string
+	if auth.Attributes != nil {
+		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
+		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
+		attrSecretHash = strings.TrimSpace(auth.Attributes["hmac_secret_hash"])
+	}
+	for i := range s.cfg.ToCodexKey {
+		entry := &s.cfg.ToCodexKey[i]
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
+			return entry
+		}
+		if attrKey == "" {
+			continue
+		}
+		if attrBase != "" && cfgBase != "" && !strings.EqualFold(cfgBase, attrBase) {
+			continue
+		}
+		for _, keyEntry := range entry.EffectiveAPIKeyEntries() {
+			if !strings.EqualFold(strings.TrimSpace(keyEntry.APIKey), attrKey) {
+				continue
+			}
+			if attrSecretHash != "" && util.SHA256Hex(keyEntry.HMACSecret) != attrSecretHash {
+				continue
+			}
+			return entry
+		}
+	}
+	return nil
+}
+
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 	cfg := s.cfg
 	if cfg == nil {
@@ -1411,6 +1470,13 @@ func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
 }
 
 func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
+	if entry == nil {
+		return nil
+	}
+	return registry.WithCodexBuiltins(buildConfigModels(entry.Models, "openai", "openai"))
+}
+
+func buildToCodexConfigModels(entry *config.ToCodexKey) []*ModelInfo {
 	if entry == nil {
 		return nil
 	}

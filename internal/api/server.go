@@ -601,6 +601,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
 		mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
 
+		mgmt.GET("/tocodex-api-key", s.mgmt.GetToCodexKeys)
+		mgmt.PUT("/tocodex-api-key", s.mgmt.PutToCodexKeys)
+		mgmt.PATCH("/tocodex-api-key", s.mgmt.PatchToCodexKey)
+		mgmt.DELETE("/tocodex-api-key", s.mgmt.DeleteToCodexKey)
+
 		mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
 		mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
 		mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)

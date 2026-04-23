@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/synthesizer"
 )
 
@@ -35,6 +36,31 @@ type codexKeyWithAuthIndex struct {
 	Headers        map[string]string               `json:"headers,omitempty"`
 	ExcludedModels []string                        `json:"excluded-models,omitempty"`
 	AuthIndex      string                          `json:"auth-index,omitempty"`
+}
+
+type tocodexAPIKeyEntryWithAuthIndex struct {
+	config.ToCodexAPIKeyEntry
+	AuthIndex string `json:"auth-index,omitempty"`
+}
+
+type tocodexKeyWithAuthIndex struct {
+	APIKey               string                            `json:"api-key"`
+	HMACSecret           string                            `json:"hmac-secret,omitempty"`
+	APIKeyEntries        []tocodexAPIKeyEntryWithAuthIndex `json:"api-key-entries,omitempty"`
+	Priority             int                               `json:"priority,omitempty"`
+	Prefix               string                            `json:"prefix,omitempty"`
+	BaseURL              string                            `json:"base-url"`
+	ProxyURL             string                            `json:"proxy-url,omitempty"`
+	RequestMode          string                            `json:"request-mode,omitempty"`
+	ChatPath             string                            `json:"chat-path,omitempty"`
+	ResponsesPath        string                            `json:"responses-path,omitempty"`
+	ResponsesCompactPath string                            `json:"responses-compact-path,omitempty"`
+	ModelsPath           string                            `json:"models-path,omitempty"`
+	TestPath             string                            `json:"test-path,omitempty"`
+	Models               []config.CodexModel               `json:"models,omitempty"`
+	Headers              map[string]string                 `json:"headers,omitempty"`
+	ExcludedModels       []string                          `json:"excluded-models,omitempty"`
+	AuthIndex            string                            `json:"auth-index,omitempty"`
 }
 
 type vertexCompatKeyWithAuthIndex struct {
@@ -193,6 +219,66 @@ func (h *Handler) codexKeysWithAuthIndex() []codexKeyWithAuthIndex {
 				response.APIKeyEntries[j] = codexAPIKeyEntryWithAuthIndex{
 					CodexAPIKeyEntry: apiKeyEntry,
 					AuthIndex:        liveIndexByID[id],
+				}
+			}
+		}
+		out[i] = response
+	}
+	return out
+}
+
+func (h *Handler) tocodexKeysWithAuthIndex() []tocodexKeyWithAuthIndex {
+	if h == nil {
+		return nil
+	}
+	liveIndexByID := h.liveAuthIndexByID()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg == nil {
+		return nil
+	}
+
+	idGen := synthesizer.NewStableIDGenerator()
+	out := make([]tocodexKeyWithAuthIndex, len(h.cfg.ToCodexKey))
+	for i := range h.cfg.ToCodexKey {
+		entry := h.cfg.ToCodexKey[i]
+		response := tocodexKeyWithAuthIndex{
+			APIKey:               entry.APIKey,
+			HMACSecret:           entry.HMACSecret,
+			Priority:             entry.Priority,
+			Prefix:               entry.Prefix,
+			BaseURL:              entry.BaseURL,
+			ProxyURL:             entry.ProxyURL,
+			RequestMode:          entry.RequestMode,
+			ChatPath:             entry.ChatPath,
+			ResponsesPath:        entry.ResponsesPath,
+			ResponsesCompactPath: entry.ResponsesCompactPath,
+			ModelsPath:           entry.ModelsPath,
+			TestPath:             entry.TestPath,
+			Models:               entry.Models,
+			Headers:              entry.Headers,
+			ExcludedModels:       entry.ExcludedModels,
+		}
+		if len(entry.APIKeyEntries) == 0 {
+			if key := strings.TrimSpace(entry.APIKey); key != "" && strings.TrimSpace(entry.HMACSecret) != "" {
+				id, _ := idGen.Next("tocodex:apikey", key, util.SHA256Hex(entry.HMACSecret), entry.BaseURL, entry.ProxyURL)
+				response.AuthIndex = liveIndexByID[id]
+			}
+		} else {
+			response.APIKey = ""
+			response.HMACSecret = ""
+			response.APIKeyEntries = make([]tocodexAPIKeyEntryWithAuthIndex, len(entry.APIKeyEntries))
+			for j := range entry.APIKeyEntries {
+				apiKeyEntry := entry.APIKeyEntries[j]
+				proxyURL := strings.TrimSpace(apiKeyEntry.ProxyURL)
+				if proxyURL == "" {
+					proxyURL = strings.TrimSpace(entry.ProxyURL)
+				}
+				id, _ := idGen.Next("tocodex:apikey", apiKeyEntry.APIKey, util.SHA256Hex(apiKeyEntry.HMACSecret), entry.BaseURL, proxyURL)
+				response.APIKeyEntries[j] = tocodexAPIKeyEntryWithAuthIndex{
+					ToCodexAPIKeyEntry: apiKeyEntry,
+					AuthIndex:          liveIndexByID[id],
 				}
 			}
 		}
