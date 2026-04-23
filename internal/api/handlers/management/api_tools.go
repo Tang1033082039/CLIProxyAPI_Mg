@@ -44,6 +44,9 @@ type apiCallRequest struct {
 	AuthIndexSnake  *string           `json:"auth_index"`
 	AuthIndexCamel  *string           `json:"authIndex"`
 	AuthIndexPascal *string           `json:"AuthIndex"`
+	ProxyURLSnake   *string           `json:"proxy_url"`
+	ProxyURLCamel   *string           `json:"proxyUrl"`
+	ProxyURLPascal  *string           `json:"ProxyURL"`
 	Method          string            `json:"method"`
 	URL             string            `json:"url"`
 	Header          map[string]string `json:"header"`
@@ -74,6 +77,8 @@ type apiCallResponse struct {
 //   - auth_index / authIndex / AuthIndex (optional):
 //     The credential "auth_index" from GET /v0/management/auth-files (or other endpoints returning it).
 //     If omitted or not found, credential-specific proxy/token substitution is skipped.
+//   - proxy_url / proxyUrl / ProxyURL (optional):
+//     Explicit proxy override for this request only. Useful for testing unsaved provider settings.
 //   - method (required): HTTP method, e.g. GET, POST, PUT, PATCH, DELETE.
 //   - url (required): Absolute URL including scheme and host, e.g. "https://api.example.com/v1/ping".
 //   - header (optional): Request headers map.
@@ -86,9 +91,11 @@ type apiCallResponse struct {
 //   - data (optional): Raw request body as string (useful for POST/PUT/PATCH).
 //
 // Proxy selection (highest priority first):
-//  1. Selected credential proxy_url
-//  2. Global config proxy-url
-//  3. Direct connect (environment proxies are not used)
+//  1. Explicit request proxy_url
+//  2. Selected credential proxy_url
+//  3. Matched API key config proxy-url
+//  4. Global config proxy-url
+//  5. Direct connect (environment proxies are not used)
 //
 // Response JSON (returned with HTTP 200 when the APICall itself succeeds):
 //   - status_code: Upstream HTTP status code.
@@ -132,6 +139,7 @@ func (h *Handler) APICall(c *gin.Context) {
 
 	authIndex := firstNonEmptyString(body.AuthIndexSnake, body.AuthIndexCamel, body.AuthIndexPascal)
 	auth := h.authByIndex(authIndex)
+	proxyOverride := firstNonEmptyString(body.ProxyURLSnake, body.ProxyURLCamel, body.ProxyURLPascal)
 
 	reqHeaders := body.Header
 	if reqHeaders == nil {
@@ -189,7 +197,7 @@ func (h *Handler) APICall(c *gin.Context) {
 	httpClient := &http.Client{
 		Timeout: defaultAPICallTimeout,
 	}
-	httpClient.Transport = h.apiCallTransport(auth)
+	httpClient.Transport = h.apiCallTransportWithOverride(auth, proxyOverride)
 
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
@@ -632,7 +640,14 @@ func (h *Handler) authByIndex(authIndex string) *coreauth.Auth {
 }
 
 func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
+	return h.apiCallTransportWithOverride(auth, "")
+}
+
+func (h *Handler) apiCallTransportWithOverride(auth *coreauth.Auth, proxyOverride string) http.RoundTripper {
 	var proxyCandidates []string
+	if proxyStr := strings.TrimSpace(proxyOverride); proxyStr != "" {
+		proxyCandidates = append(proxyCandidates, proxyStr)
+	}
 	if auth != nil {
 		if proxyStr := strings.TrimSpace(auth.ProxyURL); proxyStr != "" {
 			proxyCandidates = append(proxyCandidates, proxyStr)
