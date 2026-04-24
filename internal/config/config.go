@@ -1176,7 +1176,32 @@ func normalizeOptionalRequestPath(path string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return NormalizeRequestPath(trimmed, "")
+	return NormalizeRequestPathOrURL(trimmed, "")
+}
+
+// NormalizeRequestPathOrURL normalizes an HTTP request path, or preserves an
+// absolute URL while normalizing its path/query portion.
+func NormalizeRequestPathOrURL(pathOrURL string, fallback string) string {
+	trimmed := strings.TrimSpace(pathOrURL)
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(fallback)
+	}
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "://") {
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			normalizedPath := parsed.EscapedPath()
+			if normalizedPath == "" {
+				normalizedPath = "/"
+			}
+			if parsed.RawQuery != "" {
+				normalizedPath += "?" + parsed.RawQuery
+			}
+			return parsed.Scheme + "://" + parsed.Host + normalizedPath
+		}
+	}
+	return NormalizeRequestPath(trimmed, fallback)
 }
 
 // NormalizeRequestPath normalizes an HTTP request path or URL to a path + query string.

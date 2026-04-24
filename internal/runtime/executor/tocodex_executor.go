@@ -210,7 +210,7 @@ func (e *ToCodexExecutor) executeResponses(ctx context.Context, auth *cliproxyau
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body)
 
-	url := strings.TrimSuffix(resolved.BaseURL, "/") + resolved.ResponsesPath
+	url := resolveToCodexRequestURL(resolved.BaseURL, resolved.ResponsesPath, toCodexDefaultResponsesPath)
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
 	if err != nil {
 		return resp, err
@@ -307,7 +307,7 @@ func (e *ToCodexExecutor) executeResponsesCompact(ctx context.Context, auth *cli
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body)
 
-	url := strings.TrimSuffix(resolved.BaseURL, "/") + resolved.ResponsesCompactPath
+	url := resolveToCodexRequestURL(resolved.BaseURL, resolved.ResponsesCompactPath, toCodexDefaultResponsesCompactPath)
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
 	if err != nil {
 		return resp, err
@@ -385,7 +385,7 @@ func (e *ToCodexExecutor) executeResponsesStream(ctx context.Context, auth *clip
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body = normalizeCodexInstructions(body)
 
-	url := strings.TrimSuffix(resolved.BaseURL, "/") + resolved.ResponsesPath
+	url := resolveToCodexRequestURL(resolved.BaseURL, resolved.ResponsesPath, toCodexDefaultResponsesPath)
 	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
 	if err != nil {
 		return nil, err
@@ -487,7 +487,7 @@ func (e *ToCodexExecutor) executeChat(ctx context.Context, auth *cliproxyauth.Au
 		return resp, err
 	}
 
-	url := strings.TrimSuffix(resolved.BaseURL, "/") + resolved.ChatPath
+	url := resolveToCodexRequestURL(resolved.BaseURL, resolved.ChatPath, toCodexDefaultChatPath)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return resp, err
@@ -558,7 +558,7 @@ func (e *ToCodexExecutor) executeChatStream(ctx context.Context, auth *cliproxya
 	}
 	translated, _ = sjson.SetBytes(translated, "stream_options.include_usage", true)
 
-	url := strings.TrimSuffix(resolved.BaseURL, "/") + resolved.ChatPath
+	url := resolveToCodexRequestURL(resolved.BaseURL, resolved.ChatPath, toCodexDefaultChatPath)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return nil, err
@@ -669,9 +669,9 @@ func (e *ToCodexExecutor) resolveRequestConfig(auth *cliproxyauth.Auth) (tocodex
 				resolved.BaseURL = cfgBase
 			}
 			resolved.RequestMode = normalizeToCodexExecutionMode(entry.RequestMode)
-			resolved.ChatPath = config.NormalizeRequestPath(entry.ChatPath, toCodexDefaultChatPath)
-			resolved.ResponsesPath = config.NormalizeRequestPath(entry.ResponsesPath, toCodexDefaultResponsesPath)
-			resolved.ResponsesCompactPath = config.NormalizeRequestPath(entry.ResponsesCompactPath, toCodexDefaultResponsesCompactPath)
+			resolved.ChatPath = config.NormalizeRequestPathOrURL(entry.ChatPath, toCodexDefaultChatPath)
+			resolved.ResponsesPath = config.NormalizeRequestPathOrURL(entry.ResponsesPath, toCodexDefaultResponsesPath)
+			resolved.ResponsesCompactPath = config.NormalizeRequestPathOrURL(entry.ResponsesCompactPath, toCodexDefaultResponsesCompactPath)
 			return validateToCodexResolvedConfig(resolved)
 		}
 	}
@@ -680,9 +680,9 @@ func (e *ToCodexExecutor) resolveRequestConfig(auth *cliproxyauth.Auth) (tocodex
 
 func validateToCodexResolvedConfig(resolved toCodexResolvedConfig) (tocodexResolvedConfig, error) {
 	resolved.RequestMode = normalizeToCodexExecutionMode(resolved.RequestMode)
-	resolved.ChatPath = config.NormalizeRequestPath(resolved.ChatPath, toCodexDefaultChatPath)
-	resolved.ResponsesPath = config.NormalizeRequestPath(resolved.ResponsesPath, toCodexDefaultResponsesPath)
-	resolved.ResponsesCompactPath = config.NormalizeRequestPath(resolved.ResponsesCompactPath, toCodexDefaultResponsesCompactPath)
+	resolved.ChatPath = config.NormalizeRequestPathOrURL(resolved.ChatPath, toCodexDefaultChatPath)
+	resolved.ResponsesPath = config.NormalizeRequestPathOrURL(resolved.ResponsesPath, toCodexDefaultResponsesPath)
+	resolved.ResponsesCompactPath = config.NormalizeRequestPathOrURL(resolved.ResponsesCompactPath, toCodexDefaultResponsesCompactPath)
 	if resolved.BaseURL == "" {
 		return resolved, statusErr{code: http.StatusUnauthorized, msg: "missing ToCodex baseURL"}
 	}
@@ -702,6 +702,17 @@ func normalizeToCodexExecutionMode(mode string) string {
 	default:
 		return "responses"
 	}
+}
+
+func resolveToCodexRequestURL(baseURL, pathOrURL, fallback string) string {
+	normalized := config.NormalizeRequestPathOrURL(pathOrURL, fallback)
+	if normalized == "" {
+		return ""
+	}
+	if strings.Contains(normalized, "://") {
+		return normalized
+	}
+	return strings.TrimSuffix(strings.TrimSpace(baseURL), "/") + normalized
 }
 
 func applyToCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, resolved toCodexResolvedConfig, rawBody []byte, stream bool) error {

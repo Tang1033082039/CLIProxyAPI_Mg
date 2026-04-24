@@ -1596,11 +1596,11 @@ func normalizeToCodexKey(entry *config.ToCodexKey) {
 	default:
 		entry.RequestMode = "responses"
 	}
-	entry.ChatPath = config.NormalizeRequestPath(entry.ChatPath, "")
-	entry.ResponsesPath = config.NormalizeRequestPath(entry.ResponsesPath, "")
-	entry.ResponsesCompactPath = config.NormalizeRequestPath(entry.ResponsesCompactPath, "")
-	entry.ModelsPath = config.NormalizeRequestPath(entry.ModelsPath, "")
-	entry.TestPath = config.NormalizeRequestPath(entry.TestPath, "")
+	entry.ChatPath = config.NormalizeRequestPathOrURL(entry.ChatPath, "")
+	entry.ResponsesPath = config.NormalizeRequestPathOrURL(entry.ResponsesPath, "")
+	entry.ResponsesCompactPath = config.NormalizeRequestPathOrURL(entry.ResponsesCompactPath, "")
+	entry.ModelsPath = config.NormalizeRequestPathOrURL(entry.ModelsPath, "")
+	entry.TestPath = config.NormalizeRequestPathOrURL(entry.TestPath, "")
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
 	if len(entry.Models) == 0 {
