@@ -841,17 +841,10 @@ func applyToCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, resolved toCo
 		r.Header.Set("Host", r.URL.Host)
 	}
 
-	contentLength := int64(-1)
-	if rawBody != nil {
-		contentLength = int64(len(rawBody))
+	if r.ContentLength < 0 && rawBody != nil {
+		r.ContentLength = int64(len(rawBody))
 	}
-	if contentLength < 0 && r.ContentLength >= 0 {
-		contentLength = r.ContentLength
-	}
-	if contentLength >= 0 {
-		r.ContentLength = contentLength
-		r.Header.Set("Content-Length", fmt.Sprintf("%d", contentLength))
-	}
+	r.Header.Del("Content-Length")
 
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	nonce := strings.TrimSpace(r.Header.Get("X-ToCodex-Nonce"))
