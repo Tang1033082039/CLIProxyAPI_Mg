@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	defaultManagementReleaseURL  = "https://api.github.com/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest"
 	defaultManagementFallbackURL = "https://cpamc.router-for.me/"
 	managementAssetName          = "management.html"
 	httpUserAgent                = "CLIProxyAPI-management-updater"
@@ -303,12 +302,12 @@ func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, loca
 func resolveReleaseURL(repo string) string {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
-		return defaultManagementReleaseURL
+		return defaultManagementReleaseURL()
 	}
 
 	parsed, err := url.Parse(repo)
 	if err != nil || parsed.Host == "" {
-		return defaultManagementReleaseURL
+		return defaultManagementReleaseURL()
 	}
 
 	host := strings.ToLower(parsed.Host)
@@ -329,12 +328,31 @@ func resolveReleaseURL(repo string) string {
 		}
 	}
 
-	return defaultManagementReleaseURL
+	return defaultManagementReleaseURL()
+}
+
+func defaultManagementReleaseURL() string {
+	return releaseURLFromGitHubRepository(config.DefaultPanelGitHubRepository)
+}
+
+func releaseURLFromGitHubRepository(repo string) string {
+	parsed, err := url.Parse(strings.TrimSpace(repo))
+	if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Host, "github.com") {
+		return "https://api.github.com/repos/Tang1033082039/Mg-Cli-Proxy-API-Management-Center/releases/latest"
+	}
+
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "https://api.github.com/repos/Tang1033082039/Mg-Cli-Proxy-API-Management-Center/releases/latest"
+	}
+
+	repoName := strings.TrimSuffix(parts[1], ".git")
+	return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", parts[0], repoName)
 }
 
 func fetchLatestAsset(ctx context.Context, client *http.Client, releaseURL string) (*releaseAsset, string, error) {
 	if strings.TrimSpace(releaseURL) == "" {
-		releaseURL = defaultManagementReleaseURL
+		releaseURL = defaultManagementReleaseURL()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
