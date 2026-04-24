@@ -704,6 +704,90 @@ func normalizeToCodexExecutionMode(mode string) string {
 	}
 }
 
+func splitToCodexPathAndQuery(value string) (string, string) {
+	normalized := config.NormalizeRequestPath(value, "/")
+	if normalized == "" {
+		return "/", ""
+	}
+	if idx := strings.Index(normalized, "?"); idx >= 0 {
+		path := normalized[:idx]
+		if path == "" {
+			path = "/"
+		}
+		return path, normalized[idx+1:]
+	}
+	return normalized, ""
+}
+
+func splitToCodexPathSegments(value string) []string {
+	trimmed := strings.Trim(strings.TrimSpace(value), "/")
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, "/")
+	segments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		segments = append(segments, part)
+	}
+	return segments
+}
+
+func resolveToCodexPathOverlap(baseSegments, requestSegments []string) int {
+	maxSize := len(baseSegments)
+	if len(requestSegments) < maxSize {
+		maxSize = len(requestSegments)
+	}
+	for size := maxSize; size > 0; size-- {
+		matched := true
+		for idx := 0; idx < size; idx++ {
+			if baseSegments[len(baseSegments)-size+idx] != requestSegments[idx] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return size
+		}
+	}
+	return 0
+}
+
+func joinToCodexRequestPath(basePath, requestPath string) string {
+	normalizedBasePath := config.NormalizeRequestPath(basePath, "/")
+	normalizedRequestPath := config.NormalizeRequestPath(requestPath, "/")
+	baseSegments := splitToCodexPathSegments(normalizedBasePath)
+	requestSegments := splitToCodexPathSegments(normalizedRequestPath)
+	if len(requestSegments) == 0 {
+		return normalizedBasePath
+	}
+
+	mergedBaseSegments := baseSegments
+	overlapSize := resolveToCodexPathOverlap(baseSegments, requestSegments)
+	if overlapSize == 0 {
+		firstSharedIndex := -1
+		for idx, segment := range baseSegments {
+			if segment == requestSegments[0] {
+				firstSharedIndex = idx
+				break
+			}
+		}
+		if firstSharedIndex >= 0 {
+			mergedBaseSegments = baseSegments[:firstSharedIndex+1]
+			overlapSize = resolveToCodexPathOverlap(mergedBaseSegments, requestSegments)
+		}
+	}
+
+	mergedSegments := append(append([]string{}, mergedBaseSegments...), requestSegments[overlapSize:]...)
+	if len(mergedSegments) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(mergedSegments, "/")
+}
+
 func resolveToCodexRequestURL(baseURL, pathOrURL, fallback string) string {
 	normalized := config.NormalizeRequestPathOrURL(pathOrURL, fallback)
 	if normalized == "" {
@@ -712,7 +796,19 @@ func resolveToCodexRequestURL(baseURL, pathOrURL, fallback string) string {
 	if strings.Contains(normalized, "://") {
 		return normalized
 	}
-	return strings.TrimSuffix(strings.TrimSpace(baseURL), "/") + normalized
+	trimmedBaseURL := strings.TrimSpace(baseURL)
+	if trimmedBaseURL == "" {
+		return normalized
+	}
+	parsedBase, err := url.Parse(trimmedBaseURL)
+	if err != nil || parsedBase.Scheme == "" || parsedBase.Host == "" {
+		return strings.TrimSuffix(trimmedBaseURL, "/") + normalized
+	}
+	path, rawQuery := splitToCodexPathAndQuery(normalized)
+	parsedBase.Path = joinToCodexRequestPath(parsedBase.Path, path)
+	parsedBase.RawPath = ""
+	parsedBase.RawQuery = rawQuery
+	return parsedBase.String()
 }
 
 func applyToCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, resolved toCodexResolvedConfig, rawBody []byte, stream bool) error {
