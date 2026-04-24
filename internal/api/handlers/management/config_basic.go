@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
@@ -89,6 +90,37 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"latest-version": version})
+}
+
+// PostUpdateManagementPanel downloads the latest management control panel asset on demand.
+func (h *Handler) PostUpdateManagementPanel(c *gin.Context) {
+	if h == nil || h.cfg == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "config_unavailable", "message": "configuration is not available"})
+		return
+	}
+	if h.cfg.RemoteManagement.DisableControlPanel {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "control_panel_disabled", "message": "management control panel is disabled"})
+		return
+	}
+
+	staticDir := managementasset.StaticDir(h.configFilePath)
+	if strings.TrimSpace(staticDir) == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "static_path_unavailable", "message": "management static path is unavailable"})
+		return
+	}
+
+	updated := managementasset.ForceEnsureLatestManagementHTML(
+		c.Request.Context(),
+		staticDir,
+		h.cfg.ProxyURL,
+		h.cfg.RemoteManagement.PanelGitHubRepository,
+	)
+	if !updated {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "update_failed", "message": "failed to update management control panel"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func WriteConfig(path string, data []byte) error {

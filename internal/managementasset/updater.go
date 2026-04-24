@@ -179,6 +179,15 @@ func FilePath(configFilePath string) string {
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // It coalesces concurrent sync attempts and returns whether the asset exists after the sync attempt.
 func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) bool {
+	return ensureLatestManagementHTML(ctx, staticDir, proxyURL, panelRepository, false)
+}
+
+// ForceEnsureLatestManagementHTML bypasses the short sync throttle for explicit user-triggered updates.
+func ForceEnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) bool {
+	return ensureLatestManagementHTML(ctx, staticDir, proxyURL, panelRepository, true)
+}
+
+func ensureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string, force bool) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -194,7 +203,7 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		lastUpdateCheckMu.Lock()
 		now := time.Now()
 		timeSinceLastAttempt := now.Sub(lastUpdateCheckTime)
-		if !lastUpdateCheckTime.IsZero() && timeSinceLastAttempt < managementSyncMinInterval {
+		if !force && !lastUpdateCheckTime.IsZero() && timeSinceLastAttempt < managementSyncMinInterval {
 			lastUpdateCheckMu.Unlock()
 			log.Debugf(
 				"management asset sync skipped by throttle: last attempt %v ago (interval %v)",
