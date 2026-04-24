@@ -5,10 +5,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -340,6 +343,7 @@ func (s *Server) setupRoutes() {
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(s.ClientModelAccessMiddleware())
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -356,6 +360,7 @@ func (s *Server) setupRoutes() {
 	// Codex CLI direct route aliases (chatgpt_base_url compatible)
 	codexDirect := s.engine.Group("/backend-api/codex")
 	codexDirect.Use(AuthMiddleware(s.accessManager))
+	codexDirect.Use(s.ClientModelAccessMiddleware())
 	{
 		codexDirect.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		codexDirect.POST("/responses", openaiResponsesHandlers.Responses)
@@ -365,8 +370,9 @@ func (s *Server) setupRoutes() {
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(s.ClientModelAccessMiddleware())
 	{
-		v1beta.GET("/models", geminiHandlers.GeminiModels)
+		v1beta.GET("/models", s.geminiModelsHandler(geminiHandlers))
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
 		v1beta.GET("/models/*action", geminiHandlers.GeminiGetHandler)
 	}
@@ -780,15 +786,79 @@ func (s *Server) watchKeepAlive() {
 func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
+		allowedModels, limited := s.allowedModelsForContext(c)
 
 		// Route to Claude handler if User-Agent starts with "claude-cli"
 		if strings.HasPrefix(userAgent, "claude-cli") {
 			// log.Debugf("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
+			if limited {
+				models := filterModelMapsByAccess(claudeHandler.Models(), allowedModels, "id")
+				firstID := ""
+				lastID := ""
+				if len(models) > 0 {
+					firstID, _ = models[0]["id"].(string)
+					lastID, _ = models[len(models)-1]["id"].(string)
+				}
+				c.JSON(http.StatusOK, gin.H{"data": models, "has_more": false, "first_id": firstID, "last_id": lastID})
+				return
+			}
 			claudeHandler.ClaudeModels(c)
 		} else {
 			// log.Debugf("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
+			if limited {
+				models := filterModelMapsByAccess(openaiHandler.Models(), allowedModels, "id")
+				filteredModels := make([]map[string]any, 0, len(models))
+				for _, model := range models {
+					filteredModel := map[string]any{"id": model["id"], "object": model["object"]}
+					if created, exists := model["created"]; exists {
+						filteredModel["created"] = created
+					}
+					if ownedBy, exists := model["owned_by"]; exists {
+						filteredModel["owned_by"] = ownedBy
+					}
+					filteredModels = append(filteredModels, filteredModel)
+				}
+				c.JSON(http.StatusOK, gin.H{"object": "list", "data": filteredModels})
+				return
+			}
 			openaiHandler.OpenAIModels(c)
 		}
+	}
+}
+
+func (s *Server) geminiModelsHandler(geminiHandler *gemini.GeminiAPIHandler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		allowedModels, limited := s.allowedModelsForContext(c)
+		if !limited {
+			geminiHandler.GeminiModels(c)
+			return
+		}
+
+		rawModels := filterModelMapsByAccess(geminiHandler.Models(), allowedModels, "name", "displayName")
+		normalizedModels := make([]map[string]any, 0, len(rawModels))
+		defaultMethods := []string{"generateContent"}
+		for _, model := range rawModels {
+			normalizedModel := make(map[string]any, len(model))
+			for k, v := range model {
+				normalizedModel[k] = v
+			}
+			if name, ok := normalizedModel["name"].(string); ok && name != "" {
+				if !strings.HasPrefix(name, "models/") {
+					normalizedModel["name"] = "models/" + name
+				}
+				if displayName, _ := normalizedModel["displayName"].(string); displayName == "" {
+					normalizedModel["displayName"] = name
+				}
+				if description, _ := normalizedModel["description"].(string); description == "" {
+					normalizedModel["description"] = name
+				}
+			}
+			if _, ok := normalizedModel["supportedGenerationMethods"]; !ok {
+				normalizedModel["supportedGenerationMethods"] = defaultMethods
+			}
+			normalizedModels = append(normalizedModels, normalizedModel)
+		}
+		c.JSON(http.StatusOK, gin.H{"models": normalizedModels})
 	}
 }
 
@@ -1068,6 +1138,139 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		}
 		c.AbortWithStatusJSON(statusCode, gin.H{"error": err.Message})
 	}
+}
+
+func (s *Server) ClientModelAccessMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s == nil || s.cfg == nil {
+			c.Next()
+			return
+		}
+		allowedModels, limited := s.allowedModelsForContext(c)
+		if !limited {
+			c.Next()
+			return
+		}
+
+		model := requestedModelName(c)
+		if model == "" {
+			c.Next()
+			return
+		}
+		if isModelAllowed(model, allowedModels) {
+			c.Next()
+			return
+		}
+
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": fmt.Sprintf("model %q is not allowed for this API key", model),
+				"type":    "model_access_denied",
+			},
+		})
+	}
+}
+
+func (s *Server) allowedModelsForContext(c *gin.Context) (map[string]struct{}, bool) {
+	if s == nil || s.cfg == nil || len(s.cfg.APIKeyModelAccess) == 0 || c == nil {
+		return nil, false
+	}
+	apiKey := strings.TrimSpace(c.GetString("apiKey"))
+	if apiKey == "" {
+		return nil, false
+	}
+	models, exists := s.cfg.APIKeyModelAccess[apiKey]
+	if !exists || len(models) == 0 {
+		return nil, false
+	}
+	allowed := make(map[string]struct{}, len(models)*2)
+	for _, model := range models {
+		trimmed := strings.TrimSpace(model)
+		if trimmed == "" {
+			continue
+		}
+		allowed[trimmed] = struct{}{}
+		allowed[strings.TrimPrefix(trimmed, "models/")] = struct{}{}
+		allowed["models/"+strings.TrimPrefix(trimmed, "models/")] = struct{}{}
+	}
+	return allowed, len(allowed) > 0
+}
+
+func requestedModelName(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if model := modelFromGeminiPath(c.Param("action")); model != "" {
+		return model
+	}
+	if c.Request.Method == http.MethodGet || c.Request.Body == nil {
+		return ""
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return ""
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	if len(bytes.TrimSpace(body)) == 0 {
+		return ""
+	}
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Model)
+}
+
+func modelFromGeminiPath(action string) string {
+	trimmed := strings.Trim(action, "/")
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "models/") {
+		return ""
+	}
+	if idx := strings.Index(trimmed, ":"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return strings.TrimSpace(trimmed)
+}
+
+func isModelAllowed(model string, allowedModels map[string]struct{}) bool {
+	trimmed := strings.TrimSpace(model)
+	if len(allowedModels) == 0 {
+		return true
+	}
+	if trimmed == "" {
+		return false
+	}
+	if _, ok := allowedModels[trimmed]; ok {
+		return true
+	}
+	withoutPrefix := strings.TrimPrefix(trimmed, "models/")
+	if _, ok := allowedModels[withoutPrefix]; ok {
+		return true
+	}
+	_, ok := allowedModels["models/"+withoutPrefix]
+	return ok
+}
+
+func filterModelMapsByAccess(models []map[string]any, allowedModels map[string]struct{}, fields ...string) []map[string]any {
+	if len(models) == 0 || len(allowedModels) == 0 {
+		return models
+	}
+	out := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		for _, field := range fields {
+			name, _ := model[field].(string)
+			if isModelAllowed(name, allowedModels) {
+				out = append(out, model)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func configuredSignatureCacheEnabled(cfg *config.Config) bool {

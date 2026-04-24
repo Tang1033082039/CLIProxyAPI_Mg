@@ -105,11 +105,38 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 }
 
 // api-keys
-func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
+func (h *Handler) GetAPIKeys(c *gin.Context) {
+	c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys, "api-key-model-access": h.cfg.APIKeyModelAccess})
+}
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) {
-		h.cfg.APIKeys = append([]string(nil), v...)
-	}, nil)
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		h.cfg.APIKeys = normalizeAPIKeysList(arr)
+		h.cfg.APIKeyModelAccess = normalizeAPIKeyModelAccess(h.cfg.APIKeyModelAccess, h.cfg.APIKeys)
+		h.persist(c)
+		return
+	}
+	var body struct {
+		Value             []string            `json:"value"`
+		APIKeys           []string            `json:"api-keys"`
+		APIKeyModelAccess map[string][]string `json:"api-key-model-access"`
+	}
+	if err := json.Unmarshal(data, &body); err == nil && (body.Value != nil || body.APIKeys != nil || body.APIKeyModelAccess != nil) {
+		keys := body.Value
+		if keys == nil {
+			keys = body.APIKeys
+		}
+		h.cfg.APIKeys = normalizeAPIKeysList(keys)
+		h.cfg.APIKeyModelAccess = normalizeAPIKeyModelAccess(body.APIKeyModelAccess, h.cfg.APIKeys)
+		h.persist(c)
+		return
+	}
+	c.JSON(400, gin.H{"error": "invalid body"})
 }
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
 	h.patchStringList(c, &h.cfg.APIKeys, func() {})
@@ -2075,6 +2102,39 @@ func normalizeAPIKeysList(keys []string) []string {
 		trimmed := strings.TrimSpace(k)
 		if trimmed != "" {
 			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeAPIKeyModelAccess(access map[string][]string, keys []string) map[string][]string {
+	if len(access) == 0 {
+		return nil
+	}
+	allowedKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		trimmed := strings.TrimSpace(key)
+		if trimmed != "" {
+			allowedKeys[trimmed] = struct{}{}
+		}
+	}
+	out := make(map[string][]string)
+	for key, models := range access {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		if len(allowedKeys) > 0 {
+			if _, ok := allowedKeys[trimmedKey]; !ok {
+				continue
+			}
+		}
+		normalizedModels := normalizeAPIKeysList(models)
+		if len(normalizedModels) > 0 {
+			out[trimmedKey] = normalizedModels
 		}
 	}
 	if len(out) == 0 {
