@@ -630,7 +630,7 @@ func (e *ToCodexExecutor) executeChatStream(ctx context.Context, auth *cliproxya
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
 }
 
-func (e *ToCodexExecutor) resolveRequestConfig(auth *cliproxyauth.Auth) (tocodexResolvedConfig, error) {
+func (e *ToCodexExecutor) resolveRequestConfig(auth *cliproxyauth.Auth) (toCodexResolvedConfig, error) {
 	resolved := toCodexResolvedConfig{
 		RequestMode:          "responses",
 		ChatPath:             toCodexDefaultChatPath,
@@ -678,7 +678,7 @@ func (e *ToCodexExecutor) resolveRequestConfig(auth *cliproxyauth.Auth) (tocodex
 	return validateToCodexResolvedConfig(resolved)
 }
 
-func validateToCodexResolvedConfig(resolved toCodexResolvedConfig) (tocodexResolvedConfig, error) {
+func validateToCodexResolvedConfig(resolved toCodexResolvedConfig) (toCodexResolvedConfig, error) {
 	resolved.RequestMode = normalizeToCodexExecutionMode(resolved.RequestMode)
 	resolved.ChatPath = config.NormalizeRequestPathOrURL(resolved.ChatPath, toCodexDefaultChatPath)
 	resolved.ResponsesPath = config.NormalizeRequestPathOrURL(resolved.ResponsesPath, toCodexDefaultResponsesPath)
